@@ -1,0 +1,11 @@
+#!/bin/bash
+
+set -x
+TEMP=$(mktemp -d)
+docker run -it \
+  --rm \
+  -v "$1:/dbdata" \
+  -v "${TEMP}:/backup" \
+  ubuntu:24.04 \
+  tar cavf /backup/"$2".tar.gz /dbdata
+mv "${TEMP}/$2".tar.gz .
