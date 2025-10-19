@@ -1,0 +1,4 @@
+[submodule "deps/go"]
+	path = deps/go
+	url = git@github.com:ToolmanP/go.git
+	branch = go1.25.3-sjtubbs
