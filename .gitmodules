@@ -2,3 +2,7 @@
 	path = deps/go
 	url = git@github.com:ToolmanP/go.git
 	branch = go1.25.3-sjtubbs
+[submodule "deps/discourse"]
+	path = deps/discourse
+	url = git@github.com:ToolmanP/discourse.git
+	branch = 3.6.0.beta2-shuiyuan-sjtubbs
