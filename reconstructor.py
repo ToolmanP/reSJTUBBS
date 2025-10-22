@@ -1,25 +1,31 @@
 import asyncio
+import sys
 
 import pymongo
 import yaml
 from sqlalchemy.orm import Session
 
 from pypkg.models.mongo import MongoPost
-from pypkg.models.postgres import Author, Board, Post, Topic, make_session
-from pypkg.parser import ParsedTopic, make_parser
+from pypkg.models.postgres import Author, Board, Post, Topic
+from pypkg.parser import MetadataPassError, ParsedTopic, RegroupPassError, make_parser
 
 
-async def parse_all_topics(mongo_addr: str) -> list[ParsedTopic]:
+async def parse_all_topics(mongo_addr: str, board: str) -> list[ParsedTopic]:
     topics: list[ParsedTopic] = []
     async with pymongo.AsyncMongoClient(mongo_addr) as client:
-        doc: dict[str, str | int | list[str]]
-        async for doc in client.get_database("sjtubbs").get_collection("love").find():
-            doc.pop("_id")
-            post = MongoPost(**doc)
-            parser = make_parser(post)
-            topic = parser.parse()
-            if topic:
-                topics.append(topic)
+        async for doc in (
+            client.get_database("sjtubbs")
+            .get_collection(board)
+            .find({}, {"_id": False})
+        ):
+            if parser := make_parser(MongoPost(**doc)):
+                try:
+                    topics.append(parser.parse())
+                except (MetadataPassError, RegroupPassError):
+                    pass
+                except Exception:
+                    print(post.reid)
+                    raise
     print(f"Found topics: {len(topics)}")
     topics.sort(key=lambda t: t.reid)
     return topics
@@ -47,7 +53,6 @@ def get_or_create_board(session: Session, board_name: str) -> Board:
 
 def find_topic(session: Session, reid: int) -> bool:
     return session.query(Topic).filter_by(reid=reid).one_or_none() != None
-
 
 
 def import_parsed_topics(session: Session, parsed_topics: list["ParsedTopic"]) -> None:
@@ -100,8 +105,12 @@ def import_parsed_topics(session: Session, parsed_topics: list["ParsedTopic"]) -
             session.rollback()
             raise e
 
+
 if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Illegal input")
     with open("./config.yml", "r") as f:
         config = yaml.safe_load(f)
-        topics = asyncio.run(parse_all_topics(config["mongo"]))
-        session = make_session(config["postgres"])
+        topics = asyncio.run(parse_all_topics(config["mongo"], sys.argv[1]))
+        # session = make_session(config["postgres"])
+        # import_parsed_topics(session, topics)

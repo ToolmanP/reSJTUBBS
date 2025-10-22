@@ -11,6 +11,9 @@ from bs4 import BeautifulSoup, Tag
 from .models.mongo import MongoPost
 
 LEGACY_SEPARATOR = "☆──────────────────────────────────────☆"
+
+SYSTEM_HINT = "自动发信系统"
+ANNOUNCE_HINT = "校内机关通知"
 BASE_URL = "http://bbs.sjtu.edu.cn"
 
 
@@ -137,6 +140,14 @@ class ParsedTopic:
     assets: list[str]
 
 
+class MetadataPassError(Exception):
+    pass
+
+
+class RegroupPassError(Exception):
+    pass
+
+
 class Parser(ABC):
     _mongo_post: MongoPost
 
@@ -144,11 +155,18 @@ class Parser(ABC):
         self._mongo_post = mongo_post
 
     @abstractmethod
-    def parse(self) -> ParsedTopic | None: ...
+    def parse(self) -> ParsedTopic: ...
+
+    @staticmethod
+    def strip_all_fonts(text: str) -> str:
+        text = re.sub(r"<font (class|color)=.*>", "", text)
+        text = re.sub(r"</font>", "", text)
+        return text
 
     @staticmethod
     def to_raw_html(tag: Tag) -> str:
-        return "\n".join([str(c) for c in tag.children])
+        text = "\n".join([str(c) for c in tag.children])
+        return text
 
     @staticmethod
     def strip_assets(tag: Tag) -> list[str]:
@@ -160,7 +178,7 @@ class Parser(ABC):
             if src.startswith("http://"):
                 continue
             else:
-                url = f"{BASE_URL}{str(img["src"])}"
+                url = f"{BASE_URL}{str(img['src'])}"
             try:
                 resp = requests.get(url, timeout=1)
                 if resp.status_code != 200:
@@ -171,6 +189,18 @@ class Parser(ABC):
                 img.decompose()
         return assets
 
+    @staticmethod
+    def convert_datetime(s: str) -> datetime:
+        try:
+            return datetime.strptime(s.split(" ")[0].strip(), "%Y年%m月%d日%H:%M:%S")
+        except ValueError:
+            pass
+        try:
+            return datetime.strptime(s, "%a %b %d %H:%M:%S %Y")
+        except Exception:
+            print(s)
+            raise
+
 
 class BBSParser(Parser):
     author_re: re.Pattern[str]
@@ -178,8 +208,8 @@ class BBSParser(Parser):
 
     def __init__(self, mongo_post: MongoPost):
         super().__init__(mongo_post)
-        self.author_re = re.compile(r"发信人: (.*)\s*\((.*)\), ")
-        self.created_at_re = re.compile(r"发信站: 饮水思源 \((.*)\)")
+        self.author_re = re.compile(r"发信人: (.*)\s*\((.*)\)?, ")
+        self.created_at_re = re.compile(r"发信站: .* \((.*)\)")
 
     def regroup(self) -> tuple[Tag, list[Tag]]:
         pres: list[Tag] = []
@@ -191,25 +221,29 @@ class BBSParser(Parser):
 
     def author_pass(self, pre: Tag) -> ParsedAuthor:
         assert isinstance(pre.text, str)
-        author_match = self.author_re.search(pre.text)
-        assert author_match
-        username = author_match[1].strip()
-        assert username
-        nickname = author_match[2].strip()
-        assert nickname
-        return ParsedAuthor(username, nickname)
+        try:
+            author_match = self.author_re.search(pre.text)
+            assert author_match
+            username = author_match[1].strip()
+            assert username
+            nickname = author_match[2].strip()
+            return ParsedAuthor(username, nickname)
+        except Exception:
+            raise MetadataPassError()
 
     def date_pass(self, pre: Tag) -> datetime:
         assert isinstance(pre.text, str)
         m = self.created_at_re.search(pre.text)
-        dt = datetime.strptime(m[1].split(" ")[0].strip(), "%Y年%m月%d日%H:%M:%S")
-        return dt
+        try:
+            return self.convert_datetime(str(m[1]))
+        except TypeError:
+            raise MetadataPassError()
 
     def text_pass(self, pre: Tag) -> str:
-        t = self.__class__.to_raw_html(pre)
+        t = self.to_raw_html(pre)
         t = "\n".join(t.split("\n\n")[1:])
         t = t.split("--")[0]
-        t = markdownify.markdownify(t)
+        t = markdownify.markdownify(t, strip=["font", "img"])
         return t
 
     def asset_pass(self, pre: Tag) -> list[str]:
@@ -223,27 +257,21 @@ class BBSParser(Parser):
             raise
 
     @override
-    def parse(self) -> ParsedTopic | None:
+    def parse(self) -> ParsedTopic:
         try:
             topic_pre, post_pres = self.regroup()
-            topic_author = self.author_pass(topic_pre)
-            topic_date = self.date_pass(topic_pre)
-
         except Exception:
-            return None
-
-        assets = []
+            raise RegroupPassError()
+        topic_author = self.author_pass(topic_pre)
+        topic_date = self.date_pass(topic_pre)
 
         topic_text = self.reference_pass(self.text_pass(topic_pre))
         assets = self.strip_assets(topic_pre)
         posts: list[ParsedPost] = []
 
         for post_pre in post_pres:
-            try:
-                author = self.author_pass(post_pre)
-                date = self.date_pass(post_pre)
-            except Exception:
-                return None
+            author = self.author_pass(post_pre)
+            date = self.date_pass(post_pre)
             text = self.reference_pass(self.text_pass(post_pre))
             assets.extend(self.strip_assets(post_pre))
             posts.append(ParsedPost(author=author, created_at=date, content=text))
@@ -253,7 +281,7 @@ class BBSParser(Parser):
             self._mongo_post.section.strip(),
             topic_date,
             self._mongo_post.title.strip(),
-            topic_text,
+            f"reid={self._mongo_post.reid}\n\n" + topic_text,
             posts,
             assets,
         )
@@ -265,26 +293,27 @@ class BBSLegacyParser(Parser):
     def __init__(self, mongo_post: MongoPost):
         super().__init__(mongo_post)
         self.metadata_re = re.compile(
-            r"""(.*) \((.*)\)?
-于 
-(.*)
- 提到：""",
+            r"""([a-zA-Z0-9]+) \((.+)\)?\s+于\s*(.+)\)?\s*
+\s*提到：""",
             re.MULTILINE,
         )
 
     def metadata_pass(self, raw: str) -> tuple[ParsedAuthor, datetime]:
-        metadata_match = self.metadata_re.search(raw)
-        if not metadata_match:
-            print("raw: ", raw)
-        username = metadata_match[1].strip()
-        nickname = metadata_match[2].strip()
-        dt = datetime.strptime(
-            metadata_match[3].split(" ")[0].strip(), "%Y年%m月%d日%H:%M:%S"
-        )
-        return ParsedAuthor(username, nickname), dt
+        try:
+            metadata_match = self.metadata_re.search(raw)
+            username = metadata_match[1].strip()
+            nickname = metadata_match[2].strip()
+            dt = self.convert_datetime(str(metadata_match[3].removesuffix(")")))
+            return ParsedAuthor(username, nickname), dt
+        except Exception:
+            raise MetadataPassError()
 
     def text_pass(self, raw: str):
-        text = "\n".join(raw.split("\n\n")[1:])
+        try:
+            text = "\n".join(raw.split("\n\n")[1:])
+            text = "".join(text.split("提到：")[1:]).strip()
+        except Exception:
+            raise
         return text
 
     def reference_pass(self, text: str) -> str:
@@ -300,17 +329,25 @@ class BBSLegacyParser(Parser):
             assets.extend(self.strip_assets(whole_page))
             whole_page = self.to_raw_html(whole_page)
             whole_page = markdownify.markdownify(whole_page)
-            group.extend(whole_page.split(LEGACY_SEPARATOR)[1:])
+            whole_page = re.sub(
+                r"(\s:)+☆──────────────────────────────────────☆", "", whole_page
+            )
+            group.extend(
+                list(map(self.strip_all_fonts, whole_page.split(LEGACY_SEPARATOR)[1:]))
+            )
         return group[0], group[1:], assets
 
     @override
-    def parse(self) -> ParsedTopic | None:
-        topic_raw, post_raws, assets = self.regroup()
+    def parse(self) -> ParsedTopic:
+        try:
+            topic_raw, post_raws, assets = self.regroup()
+        except Exception:
+            raise RegroupPassError()
         topic_author, topic_date = self.metadata_pass(topic_raw)
         posts: list[ParsedPost] = []
 
         for post_raw in post_raws:
-            author, date = self.metadata_pass(topic_raw)
+            author, date = self.metadata_pass(post_raw)
             post_content = self.reference_pass(self.text_pass(post_raw))
             posts.append(ParsedPost(author, date, post_content))
 
@@ -320,13 +357,20 @@ class BBSLegacyParser(Parser):
             self._mongo_post.section.strip(),
             topic_date,
             self._mongo_post.title.strip(),
-            self.reference_pass(self.text_pass(topic_raw)),
+            f"reid={self._mongo_post.reid}\n\n"
+            + self.reference_pass(self.text_pass(topic_raw)),
             posts,
             assets,
         )
 
 
-def make_parser(post: MongoPost) -> Parser:
+def make_parser(post: MongoPost) -> Parser | None:
+    if post.pages[0].find(SYSTEM_HINT) != -1:
+        return None
+
+    if post.pages[0].find(ANNOUNCE_HINT) != -1:
+        return None
+
     if post.pages[0].find(LEGACY_SEPARATOR) != -1:
         return BBSLegacyParser(post)
     else:
