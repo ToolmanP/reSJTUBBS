@@ -70,7 +70,9 @@ class IndentionAutomata:
                 return 0, line
             pos = 0
             depth = 0
-            while pos < len(line) and line[pos : pos + 2] == ": ":
+            while pos < len(line) and (
+                line[pos : pos + 2] == ": " or line[pos : pos + 2] == ":\n"
+            ):
                 depth += 1
                 pos += 2
             return depth, line[pos:]
@@ -152,6 +154,7 @@ class Parser(ABC):
     _mongo_post: MongoPost
 
     def __init__(self, mongo_post: MongoPost):
+        mongo_post.title = mongo_post.title.strip().removeprefix("【合集】").strip()
         self._mongo_post = mongo_post
 
     @abstractmethod
@@ -169,22 +172,22 @@ class Parser(ABC):
         return text
 
     @staticmethod
-    def strip_assets(tag: Tag) -> list[str]:
+    def relabel_or_strip_imgs(tag: Tag) -> list[str]:
         assets: list[str] = []
         for img in tag.find_all("img"):
             src = str(img["src"])
             url = ""
-
-            if src.startswith("http://"):
-                continue
-            else:
+            if src.startswith("/"):
                 url = f"{BASE_URL}{str(img['src'])}"
+                img["src"] = url
+            else:
+                url = str(img["src"])
             try:
                 resp = requests.get(url, timeout=1)
                 if resp.status_code != 200:
                     raise Exception("Not reached")
+                img["alt"] = url.split("/")[-1]
                 assets.append(url)
-
             except Exception:
                 img.decompose()
         return assets
@@ -243,7 +246,7 @@ class BBSParser(Parser):
         t = self.to_raw_html(pre)
         t = "\n".join(t.split("\n\n")[1:])
         t = t.split("--")[0]
-        t = markdownify.markdownify(t, strip=["font", "img"])
+        t = markdownify.markdownify(t)
         return t
 
     def asset_pass(self, pre: Tag) -> list[str]:
@@ -262,18 +265,22 @@ class BBSParser(Parser):
             topic_pre, post_pres = self.regroup()
         except Exception:
             raise RegroupPassError()
+
         topic_author = self.author_pass(topic_pre)
         topic_date = self.date_pass(topic_pre)
+        assets = self.relabel_or_strip_imgs(topic_pre)
 
-        topic_text = self.reference_pass(self.text_pass(topic_pre))
-        assets = self.strip_assets(topic_pre)
+        topic_text = self.text_pass(topic_pre)
+        topic_text = self.reference_pass(topic_text)
         posts: list[ParsedPost] = []
 
         for post_pre in post_pres:
             author = self.author_pass(post_pre)
             date = self.date_pass(post_pre)
-            text = self.reference_pass(self.text_pass(post_pre))
-            assets.extend(self.strip_assets(post_pre))
+            assets.extend(self.relabel_or_strip_imgs(post_pre))
+            text = self.text_pass(post_pre)
+            text = self.reference_pass(text)
+
             posts.append(ParsedPost(author=author, created_at=date, content=text))
         return ParsedTopic(
             int(self._mongo_post.reid.strip()),
@@ -283,7 +290,7 @@ class BBSParser(Parser):
             self._mongo_post.title.strip(),
             f"reid={self._mongo_post.reid}\n\n" + topic_text,
             posts,
-            assets,
+            [],
         )
 
 
@@ -326,7 +333,7 @@ class BBSLegacyParser(Parser):
             soup = BeautifulSoup(page, features="html.parser")
             whole_page = soup.find("pre")
             assert whole_page
-            assets.extend(self.strip_assets(whole_page))
+            assets = self.relabel_or_strip_imgs(whole_page)
             whole_page = self.to_raw_html(whole_page)
             whole_page = markdownify.markdownify(whole_page)
             whole_page = re.sub(

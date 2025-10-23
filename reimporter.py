@@ -1,32 +1,34 @@
-import asyncio
 import sys
+import click
 
 import pymongo
-import yaml
 from sqlalchemy.orm import Session
 
+from pypkg.config import load_config
 from pypkg.models.mongo import MongoPost
-from pypkg.models.postgres import Author, Board, Post, Topic
+from pypkg.models.postgres import Author, Board, Post, Topic, make_session
 from pypkg.parser import MetadataPassError, ParsedTopic, RegroupPassError, make_parser
 
 
-async def parse_all_topics(mongo_addr: str, board: str) -> list[ParsedTopic]:
+def parse_all_topics(mongo_addr: str, board: str) -> list[ParsedTopic]:
     topics: list[ParsedTopic] = []
-    async with pymongo.AsyncMongoClient(mongo_addr) as client:
-        async for doc in (
+    with pymongo.MongoClient(mongo_addr) as client:
+        for doc in (
             client.get_database("sjtubbs")
             .get_collection(board)
-            .find({}, {"_id": False})
+            .find({"reid": "1210297455"}, {"_id": False})
         ):
             if parser := make_parser(MongoPost(**doc)):
                 try:
-                    topics.append(parser.parse())
+                    topic = parser.parse()
+                    if len(topic.assets):
+                        print(topic.reid, topic.assets)
+                        topics.append(topic)
                 except (MetadataPassError, RegroupPassError):
                     pass
                 except Exception:
                     print(post.reid)
                     raise
-    print(f"Found topics: {len(topics)}")
     topics.sort(key=lambda t: t.reid)
     return topics
 
@@ -105,12 +107,10 @@ def import_parsed_topics(session: Session, parsed_topics: list["ParsedTopic"]) -
             session.rollback()
             raise e
 
-
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Illegal input")
-    with open("./config.yml", "r") as f:
-        config = yaml.safe_load(f)
-        topics = asyncio.run(parse_all_topics(config["mongo"], sys.argv[1]))
-        # session = make_session(config["postgres"])
-        # import_parsed_topics(session, topics)
+    config = load_config()
+    topics = parse_all_topics(config.mongo, sys.argv[1])
+    session = make_session(config.postgres)
+    import_parsed_topics(session, topics)
