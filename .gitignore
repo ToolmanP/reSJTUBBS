@@ -11,3 +11,6 @@ wheels/
 
 # Config template
 config.yml
+
+# Intermediate Results
+archives/

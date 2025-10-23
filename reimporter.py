@@ -1,8 +1,7 @@
-import sys
 import click
-
 import pymongo
 from sqlalchemy.orm import Session
+from tqdm import tqdm
 
 from pypkg.config import load_config
 from pypkg.models.mongo import MongoPost
@@ -10,25 +9,49 @@ from pypkg.models.postgres import Author, Board, Post, Topic, make_session
 from pypkg.parser import MetadataPassError, ParsedTopic, RegroupPassError, make_parser
 
 
-def parse_all_topics(mongo_addr: str, board: str) -> list[ParsedTopic]:
+def docgen(collection, reid_list: str | None = None):
+    if not reid_list:
+        for doc in collection.find({}, {"_id": False}):
+            yield doc
+    else:
+        with open(reid_list, "r") as f:
+            for line in f.readlines():
+                yield collection.find_one({"reid": line.strip()}, {"_id": False})
+
+
+def get_count(collection, reid_list: str | None = None):
+    if not reid_list:
+        return collection.count_documents({})
+    else:
+        with open(reid_list, "r") as f:
+            count = 0
+            for _ in f.readlines():
+                count += 1
+            return count
+
+
+def parse_all_topics(
+    mongo_addr: str,
+    board: str,
+    reid_list: str | None = None,
+) -> list[ParsedTopic]:
     topics: list[ParsedTopic] = []
     with pymongo.MongoClient(mongo_addr) as client:
-        for doc in (
-            client.get_database("sjtubbs")
-            .get_collection(board)
-            .find({"reid": "1210297455"}, {"_id": False})
-        ):
-            if parser := make_parser(MongoPost(**doc)):
-                try:
-                    topic = parser.parse()
-                    if len(topic.assets):
-                        print(topic.reid, topic.assets)
+        db = client.get_database("sjtubbs")
+        collection = db.get_collection(board)
+        count = get_count(collection, reid_list)
+        with tqdm(total=count) as pbar:
+            for doc in docgen(collection, reid_list):
+                if parser := make_parser(MongoPost(**doc)):
+                    try:
+                        topic = parser.parse()
                         topics.append(topic)
-                except (MetadataPassError, RegroupPassError):
-                    pass
-                except Exception:
-                    print(post.reid)
-                    raise
+                    except (MetadataPassError, RegroupPassError):
+                        pass
+                    except Exception:
+                        print(post.reid)
+                        raise
+                pbar.update()
     topics.sort(key=lambda t: t.reid)
     return topics
 
@@ -83,14 +106,6 @@ def import_parsed_topics(session: Session, parsed_topics: list["ParsedTopic"]) -
         session.add(topic)
         session.flush()
 
-        first_post = Post(
-            content=p_topic.content,
-            topic=topic,
-            author=author,
-            created_at=p_topic.created_at,
-        )
-        session.add(first_post)
-
         for p_post in p_topic.posts:
             post_author = get_or_create_author(session, p_post.author.username)
             post = Post(
@@ -107,10 +122,19 @@ def import_parsed_topics(session: Session, parsed_topics: list["ParsedTopic"]) -
             session.rollback()
             raise e
 
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Illegal input")
+
+@click.command()
+@click.option("--board", "-b", help="The board that needs to be reimported")
+@click.option(
+    "--reid_list", "-r", help="The reid list that is interested", default=None
+)
+def reimporter(board: str, reid_list: str | None):
     config = load_config()
-    topics = parse_all_topics(config.mongo, sys.argv[1])
+    topics = parse_all_topics(config.mongo, board, reid_list)
     session = make_session(config.postgres)
     import_parsed_topics(session, topics)
+    pass
+
+
+if __name__ == "__main__":
+    reimporter()
