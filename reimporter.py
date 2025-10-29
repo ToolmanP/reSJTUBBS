@@ -128,12 +128,25 @@ def import_parsed_topics(session: Session, parsed_topics: list["ParsedTopic"]) -
 @click.option(
     "--reid_list", "-r", help="The reid list that is interested", default=None
 )
-def reimporter(board: str, reid_list: str | None):
+@click.option(
+    "--dryrun",
+    "-d",
+    help="Do not import the topics",
+    is_flag=True,
+    default=False,
+)
+def reimporter(board: str, reid_list: str | None, dryrun: bool):
     config = load_config()
     topics = parse_all_topics(config.mongo, board, reid_list)
     session = make_session(config.postgres)
-    import_parsed_topics(session, topics)
-    pass
+    if not dryrun:
+        import_parsed_topics(session, topics)
+    else:
+        # for topic in topics:
+        #     print(topic.content)
+        #     for post in topic.posts:
+        #         print(post.content)
+        pass
 
 
 if __name__ == "__main__":

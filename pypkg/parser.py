@@ -167,6 +167,19 @@ class Parser(ABC):
         return text
 
     @staticmethod
+    def strip_all_repost(text: str) -> str:
+        text = re.sub(r'''(: )*\s?【 以下文字转载自 
+(.*)
+讨论区 】
+''', "", text, re.MULTILINE)
+        text = re.sub(r'''(: )*【 原文由
+(.*)
+ 所发表 】
+''', "", text, re.MULTILINE)
+        print(text)
+        return text
+
+    @staticmethod
     def to_raw_html(tag: Tag) -> str:
         text = "\n".join([str(c) for c in tag.children])
         return text
@@ -247,6 +260,7 @@ class BBSParser(Parser):
         t = "\n".join(t.split("\n\n")[1:])
         t = t.split("--")[0]
         t = markdownify.markdownify(t)
+        t = self.strip_all_repost(t)
         return t
 
     def asset_pass(self, pre: Tag) -> list[str]:
@@ -355,7 +369,8 @@ class BBSLegacyParser(Parser):
 
         for post_raw in post_raws:
             author, date = self.metadata_pass(post_raw)
-            post_content = self.reference_pass(self.text_pass(post_raw))
+            post_content = self.text_pass(post_raw)
+            post_content = self.reference_pass(post_content)
             posts.append(ParsedPost(author, date, post_content))
 
         return ParsedTopic(
