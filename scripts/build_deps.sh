@@ -2,9 +2,9 @@
 
 set -e
 
-if [[ ! -f "${ROOT}"/deps/go/bin/go ]]; then
+if [[ ! -f "${ROOT}"/deps/_go/bin/go ]]; then
 bash << EOF
-cd ${ROOT}/deps/go/src
+cd ${ROOT}/deps/_go/src
 ./make.bash
 EOF
 fi
