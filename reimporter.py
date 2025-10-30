@@ -9,39 +9,44 @@ from pypkg.models.postgres import Author, Board, Post, Topic, make_session
 from pypkg.parser import MetadataPassError, ParsedTopic, RegroupPassError, make_parser
 
 
-def docgen(collection, reid_list: str | None = None):
-    if not reid_list:
+def docgen(collection, poi: str | list[str] | None = None):
+    if not poi:
         for doc in collection.find({}, {"_id": False}):
             yield doc
-    else:
-        with open(reid_list, "r") as f:
+    elif isinstance(poi, str):
+        with open(poi, "r") as f:
             for line in f.readlines():
                 yield collection.find_one({"reid": line.strip()}, {"_id": False})
-
-
-def get_count(collection, reid_list: str | None = None):
-    if not reid_list:
-        return collection.count_documents({})
     else:
-        with open(reid_list, "r") as f:
+        for reid in poi:
+            yield collection.find_one({"reid": reid}, {"_id": False})
+
+
+def get_count(collection, poi: str | list[str] | None = None):
+    if not poi:
+        return int(collection.count_documents({}))
+    elif isinstance(poi, str):
+        with open(poi, "r") as f:
             count = 0
             for _ in f.readlines():
                 count += 1
             return count
+    else:
+        return len(poi)
 
 
 def parse_all_topics(
     mongo_addr: str,
     board: str,
-    reid_list: str | None = None,
+    poi: str | list[str] | None = None,
 ) -> list[ParsedTopic]:
     topics: list[ParsedTopic] = []
     with pymongo.MongoClient(mongo_addr) as client:
         db = client.get_database("sjtubbs")
         collection = db.get_collection(board)
-        count = get_count(collection, reid_list)
+        count = get_count(collection, poi)
         with tqdm(total=count) as pbar:
-            for doc in docgen(collection, reid_list):
+            for doc in docgen(collection, poi):
                 if parser := make_parser(MongoPost(**doc)):
                     try:
                         topic = parser.parse()
@@ -124,28 +129,29 @@ def import_parsed_topics(session: Session, parsed_topics: list["ParsedTopic"]) -
 
 
 @click.command()
-@click.option("--board", "-b", help="The board that needs to be reimported")
+@click.option("--board", "-b", help="The board that needs to be reimported.")
 @click.option(
-    "--reid_list", "-r", help="The reid list that is interested", default=None
+    "--poi",
+    help="The topic list that you are interested in. The reid must be correlated to the board you've assigned. Should be a file path or comma-seperated integer list",
+    default=None,
 )
 @click.option(
     "--dryrun",
     "-d",
-    help="Do not import the topics",
+    help="Do not import the topics to the postgres database. Only process the parsing.",
     is_flag=True,
     default=False,
 )
-def reimporter(board: str, reid_list: str | None, dryrun: bool):
+def reimporter(board: str, poi: str | list[str] | None, dryrun: bool):
     config = load_config()
-    topics = parse_all_topics(config.mongo, board, reid_list)
+    assert isinstance(poi, str)
+    if poi[0].isnumeric():
+        poi = poi.split(",")
+    topics = parse_all_topics(config.mongo, board, poi)
     session = make_session(config.postgres)
     if not dryrun:
         import_parsed_topics(session, topics)
     else:
-        # for topic in topics:
-        #     print(topic.content)
-        #     for post in topic.posts:
-        #         print(post.content)
         pass
 
 
