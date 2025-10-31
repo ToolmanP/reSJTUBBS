@@ -1,17 +1,22 @@
 package worker
 
 import (
+	"log/slog"
 	"runtime"
 	"time"
 
 	"github.com/gocolly/colly/v2"
 )
 
-var nthreads = 0
+var nthreads = 4
 var wait_interval = 1 * time.Second
 
 func init() {
 	nthreads = runtime.NumCPU()
+}
+
+func SetNthreads(nthreads int) {
+	nthreads = nthreads
 }
 
 func VisitWithRetry(c *colly.Collector, url string) {
@@ -20,6 +25,7 @@ func VisitWithRetry(c *colly.Collector, url string) {
 		if err = c.Visit(url); err == nil {
 			break
 		} else {
+			slog.Info("Retrying the", "url", url)
 			time.Sleep(wait_interval)
 		}
 	}

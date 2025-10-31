@@ -15,7 +15,7 @@ type ReidStorage struct {
 	section string
 }
 
-func NewReidPayloadFromBytes(b []byte) *models.Reid{
+func NewReidPayloadFromBytes(b []byte) *models.Reid {
 	p := &models.Reid{}
 	err := json.Unmarshal(b, p)
 	if err != nil {

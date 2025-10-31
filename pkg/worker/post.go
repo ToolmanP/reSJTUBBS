@@ -3,6 +3,7 @@ package worker
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"sync"
@@ -20,12 +21,17 @@ type PostWorkerGroup struct {
 	section string
 }
 
-func NewPostWorkerGroup(section string) *PostWorkerGroup {
+func NewPostWorkerGroup(section string) (*PostWorkerGroup, error) {
+	validator := storage.NewBoardStorage()
+	defer validator.Close()
+	if !validator.In(section) {
+		return nil, errors.New("Validation Failed for board: " + section + ". Refetch the board info and validate your input.")
+	}
 	return &PostWorkerGroup{
 		posts:   storage.NewPostStorage(section),
 		reids:   storage.NewReidStorage(section),
 		section: section,
-	}
+	}, nil
 }
 
 func (w *PostWorkerGroup) getTotalPostPage(reid string) (int, error) {
@@ -59,10 +65,10 @@ func (w *PostWorkerGroup) Run() error {
 		return err
 	}
 
-	bar := utils.NewProgressBar(len(reids), "Fetching Posts from "+w.section+":")
+	bar := utils.NewProgressBar(len(reids), "Fetching Posts from "+w.section)
 	var wg sync.WaitGroup
 	ch := make(chan string, nthreads)
-
+	bar.Start()
 	for i := range nthreads {
 		var _ = i
 		wg.Go(func() {
@@ -98,16 +104,17 @@ func (w *PostWorkerGroup) Run() error {
 			}
 			for reid := <-ch; reid != ""; reid = <-ch {
 				if err := retrieve_one(reid); err != nil {
+					slog.Error("Failed to retrieve", "reid", reid, "board", w.section, "error", err)
 				}
 				bar.Increment()
 			}
-			wg.Done()
 		})
 	}
 
 	for _, reid := range reids {
 		ch <- reid
 	}
+	close(ch)
 	wg.Wait()
 	bar.Finish()
 	return nil

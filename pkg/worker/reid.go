@@ -1,11 +1,11 @@
 package worker
 
 import (
+	"errors"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/ToolmanP/sjtubbs-archiver/pkg/client"
 	"github.com/ToolmanP/sjtubbs-archiver/pkg/models"
@@ -47,6 +47,12 @@ func FetchInitialTotal(section string) (int, error) {
 
 func NewReidWorkerGroup(section string) (*ReidWorkerGroup, error) {
 
+	validator := storage.NewBoardStorage()
+	defer validator.Close()
+	if !validator.In(section) {
+		return nil, errors.New("Validation Failed for board: " + section + ". Refetch the board info and validate your input.")
+	}
+
 	reis_storage := storage.NewReidStorage(section)
 	total, err := FetchInitialTotal(section)
 
@@ -78,7 +84,7 @@ func (w *ReidWorkerGroup) Run() error {
 	}
 
 	ch := make(chan int, nthreads)
-	bar := utils.NewProgressBar(w.total, "Fetching Reid From "+w.section+":")
+	bar := utils.NewProgressBar(w.total, "Fetching Reids From "+w.section)
 	var wg sync.WaitGroup
 	bar.Start()
 	for i := range nthreads {
@@ -97,11 +103,11 @@ func (w *ReidWorkerGroup) Run() error {
 						w.storage.SetPayload(payload)
 					}
 				})
+
 				for page := <-ch; page != 0; page = <-ch {
 					VisitWithRetry(c, utils.BuildOrdinalURL(w.section, page-1))
 					bar.Increment()
 				}
-				wg.Done()
 			},
 		)
 	}
@@ -114,10 +120,6 @@ func (w *ReidWorkerGroup) Run() error {
 	wg.Wait()
 	bar.Finish()
 	return nil
-}
-
-func (w *ReidWorkerGroup) SetSection(section string) {
-	w.section = section
 }
 
 func (w *ReidWorkerGroup) Close() {
