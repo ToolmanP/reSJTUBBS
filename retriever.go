@@ -40,20 +40,31 @@ func main() {
 					&cli.StringSliceFlag{
 						Name:     "boards",
 						Aliases:  []string{"b"},
-						Required: true,
+						Required: false,
 						Usage:    "Boards that needs to be targeted.",
 					},
 					&cli.IntFlag{
 						Name:     "nthreads",
-						Aliases:  []string{"-t"},
+						Aliases:  []string{"t"},
 						Usage:    "Multithread count.",
 						Local:    false,
 						Required: true,
 					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
+					boards := cmd.StringSlice("boards")
 					worker.SetNthreads(cmd.Int("nthreads"))
-					for _, board := range cmd.StringSlice("boards") {
+					if len(boards) == 0 {
+						var err error
+						bs := storage.NewBoardStorage()
+						boards, err = bs.LoadList()
+						if err != nil {
+							return err
+						}
+						bs.Close()
+					}
+
+					for _, board := range boards {
 						if err := func() error {
 							wg, err := worker.NewReidWorkerGroup(board)
 							if err != nil {
@@ -75,7 +86,7 @@ func main() {
 					&cli.StringSliceFlag{
 						Name:     "boards",
 						Aliases:  []string{"b"},
-						Required: true,
+						Required: false,
 						Usage:    "Boards that needs to be targeted.",
 					},
 					&cli.BoolFlag{
@@ -86,7 +97,7 @@ func main() {
 					},
 					&cli.IntFlag{
 						Name:     "nthreads",
-						Aliases:  []string{"-t"},
+						Aliases:  []string{"t"},
 						Usage:    "Multithread count.",
 						Local:    false,
 						Required: true,
@@ -94,8 +105,18 @@ func main() {
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					f := cmd.Bool("reid")
+					boards := cmd.StringSlice("boards")
 					worker.SetNthreads(cmd.Int("nthreads"))
-					for _, board := range cmd.StringSlice("boards") {
+					if len(boards) == 0 {
+						var err error
+						bs := storage.NewBoardStorage()
+						boards, err = bs.LoadList()
+						if err != nil {
+							return err
+						}
+						bs.Close()
+					}
+					for _, board := range boards {
 
 						if f {
 							if err := func() error {
