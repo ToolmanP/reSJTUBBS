@@ -1,11 +1,7 @@
-all: reid post
+all: retriever
 
-reid:
-	@mkdir -p build/
-	@go build -o build/reid_crawler ./cmd/reid/main.go
+retriever:
+	@mkdir -p build
+	@go build -o build/retriever ./retriever.go
 
-post:
-	@mkdir -p build/
-	@go build -o build/post_crawler ./cmd/post/main.go
-
-.PHONY: reid post
+.PHONY: retriever
