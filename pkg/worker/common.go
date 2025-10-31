@@ -15,8 +15,8 @@ func init() {
 	nthreads = runtime.NumCPU()
 }
 
-func SetNthreads(nthreads int) {
-	nthreads = nthreads
+func SetNthreads(t int) {
+	nthreads = t 
 }
 
 func VisitWithRetry(c *colly.Collector, url string) {
