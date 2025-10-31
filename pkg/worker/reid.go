@@ -4,12 +4,13 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/ToolmanP/sjtubbs-archiver/pkg/client"
 	"github.com/ToolmanP/sjtubbs-archiver/pkg/models"
 	"github.com/ToolmanP/sjtubbs-archiver/pkg/storage"
 	"github.com/ToolmanP/sjtubbs-archiver/pkg/utils"
-	"github.com/cheggaaa/pb/v3"
 	"github.com/gocolly/colly/v2"
 	"golang.org/x/net/html"
 )
@@ -60,8 +61,8 @@ func NewReidWorkerGroup(section string) (*ReidWorkerGroup, error) {
 	}, nil
 }
 
-func (w *ReidWorkerGroup) Run() error{
-	c := client.NewArchiverCollector()
+func (w *ReidWorkerGroup) Run() error {
+
 	parse_payload := func(nodes []*html.Node) *models.Reid {
 		author := nodes[2].FirstChild.FirstChild.Data
 		title := nodes[4].FirstChild.FirstChild.Data[3:]
@@ -76,26 +77,47 @@ func (w *ReidWorkerGroup) Run() error{
 		}
 	}
 
-	bar := pb.StartNew(w.total)
-	for page := range w.total {
-		ordinal_url := utils.BuildOrdinalURL(w.section, page)
-		c.OnHTML("tbody", func(e *colly.HTMLElement) {
-			for _, tr := range e.DOM.Find("tr").Nodes[1:] {
-				nodes := []*html.Node{}
-				for td := range tr.ChildNodes() {
-					nodes = append(nodes, td)
+	ch := make(chan int, nthreads)
+	bar := utils.NewProgressBar(w.total, "Fetching Reid From "+w.section+":")
+	var wg sync.WaitGroup
+	bar.Start()
+	for i := range nthreads {
+		var _ = i
+		wg.Go(
+			func() {
+				c := client.NewArchiverCollector()
+				c.OnHTML("tbody", func(e *colly.HTMLElement) {
+					for _, tr := range e.DOM.Find("tr").Nodes[1:] {
+						nodes := []*html.Node{}
+						for td := range tr.ChildNodes() {
+							nodes = append(nodes, td)
+						}
+						payload := parse_payload(nodes)
+						w.storage.Add(payload.Reid)
+						w.storage.SetPayload(payload)
+					}
+				})
+				for page := <-ch; page != 0; page = <-ch {
+					VisitWithRetry(c, utils.BuildOrdinalURL(w.section, page-1))
+					bar.Increment()
 				}
-				payload := parse_payload(nodes)
-				w.storage.Add(payload.Reid)
-				w.storage.SetPayload(payload)
-			}
-		})
-		if err := c.Visit(ordinal_url); err != nil {
-			return err
-		}
-		bar.Increment()
+				wg.Done()
+			},
+		)
 	}
+
+	for i := range w.total {
+		ch <- i + 1
+	}
+
+	close(ch)
+	wg.Wait()
+	bar.Finish()
 	return nil
+}
+
+func (w *ReidWorkerGroup) SetSection(section string) {
+	w.section = section
 }
 
 func (w *ReidWorkerGroup) Close() {

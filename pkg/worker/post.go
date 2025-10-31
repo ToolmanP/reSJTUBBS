@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"sync"
 
 	"github.com/ToolmanP/sjtubbs-archiver/pkg/client"
 	"github.com/ToolmanP/sjtubbs-archiver/pkg/models"
 	"github.com/ToolmanP/sjtubbs-archiver/pkg/storage"
 	"github.com/ToolmanP/sjtubbs-archiver/pkg/utils"
-	"github.com/cheggaaa/pb/v3"
 	"github.com/gocolly/colly/v2"
 )
 
@@ -28,9 +28,11 @@ func NewPostWorkerGroup(section string) *PostWorkerGroup {
 	}
 }
 
-func (w *PostWorkerGroup) getTotalPostPage(reid string) int {
+func (w *PostWorkerGroup) getTotalPostPage(reid string) (int, error) {
+	var fetcherr error
 	c := client.NewArchiverCollector()
 	p := regexp.MustCompile(`本主题共有 (\d+) 篇文章，分 (\d+) 页, 当前显示第 (\d+) 页`)
+	fetcherr = nil
 	pages := 0
 	url := utils.BuildSubordinalURL(w.section, reid, 1)
 	c.OnResponse(func(r *colly.Response) {
@@ -41,14 +43,13 @@ func (w *PostWorkerGroup) getTotalPostPage(reid string) int {
 		}
 		t, err := strconv.Atoi(matches[2])
 		if err != nil {
-			panic(err)
+			fetcherr = err
+			return
 		}
 		pages = t
 	})
-	if err := c.Visit(url); err != nil {
-		panic(err)
-	}
-	return pages
+	VisitWithRetry(c, url)
+	return pages, fetcherr
 }
 
 func (w *PostWorkerGroup) Run() error {
@@ -58,42 +59,57 @@ func (w *PostWorkerGroup) Run() error {
 		return err
 	}
 
-	c := client.NewArchiverCollector()
+	bar := utils.NewProgressBar(len(reids), "Fetching Posts from "+w.section+":")
+	var wg sync.WaitGroup
+	ch := make(chan string, nthreads)
 
-	contents := []string{}
+	for i := range nthreads {
+		var _ = i
+		wg.Go(func() {
+			contents := []string{}
+			c := client.NewArchiverCollector()
+			c.OnResponse(func(r *colly.Response) {
+				contents = append(contents, string(r.Body))
+			})
+			retrieve_one := func(reid string) error {
+				pages, err := w.getTotalPostPage(reid)
+				if err != nil {
+					return err
+				}
+				contents = []string{}
+				for page := range pages {
+					VisitWithRetry(c, utils.BuildSubordinalURL(w.section, reid, page+1))
+				}
 
-	c.OnResponse(func(r *colly.Response) {
-		contents = append(contents, string(r.Body))
-	})
-
-	bar := pb.StartNew(len(reids))
-	for _, reid := range reids {
-		pages := w.getTotalPostPage(reid)
-		contents = []string{}
-		for page := range pages {
-			url := utils.BuildSubordinalURL(w.section, reid, page+1)
-			if err := c.Visit(url); err != nil {
-				return err
+				payload, err := w.reids.GetPayload(reid)
+				if err != nil {
+					return err
+				}
+				err = w.reids.Remove(reid)
+				if err := w.posts.InsertPost(&models.Post{
+					Reid:    reid,
+					Title:   payload.Title,
+					Section: w.section,
+					Pages:   contents,
+				}); err != nil {
+					return err
+				}
+				return nil
 			}
-		}
-
-		payload, err := w.reids.GetPayload(reid)
-		if err != nil {
-			return err
-		}
-
-		err = w.reids.Remove(reid)
-
-		if err := w.posts.InsertPost(&models.Post{
-			Reid:    reid,
-			Title:   payload.Title,
-			Section: w.section,
-			Pages:   contents,
-		}); err != nil {
-			return err
-		}
-		bar.Increment()
+			for reid := <-ch; reid != ""; reid = <-ch {
+				if err := retrieve_one(reid); err != nil {
+				}
+				bar.Increment()
+			}
+			wg.Done()
+		})
 	}
+
+	for _, reid := range reids {
+		ch <- reid
+	}
+	wg.Wait()
+	bar.Finish()
 	return nil
 }
 
