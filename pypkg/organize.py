@@ -28,8 +28,6 @@ class ReplyOrganizer:
         top_k = 2
         cos_scores = util.cos_sim(query_embeddings, cand_embeddings)
         for i in range(len(queries)):
-            top_results = torch.topk(cos_scores[i], k=top_k)
+            top_results = torch.topk(cos_scores[i][: i + 1], k=min(i + 1, top_k))
             indices = top_results[1]
-            topic.posts[query_dict[i]].reply_to_id = (
-                indices[0] if indices[0] != 0 else -1
-            )
+            topic.posts[query_dict[i]].reply_to_id = (indices[0] - 1).item()

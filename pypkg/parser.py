@@ -36,6 +36,7 @@ class ParsedPost:
     content: str
     text_in: str
     quote_reply_to: QuoteReplyTo | None
+    quote_embedded: bool
     reply_to_id: int = -1
 
 
@@ -103,6 +104,7 @@ class IndentionResult:
     display: str
     input: str
     quote: QuoteReplyTo | None
+    quote_embedded: bool
 
 
 class IndentionAutomata:
@@ -131,6 +133,7 @@ class IndentionAutomata:
         display = ""
         text_input = ""
         quote = None
+        embedded = False
 
         for line in text.splitlines():
             depth, line = parse_line(line)
@@ -151,6 +154,8 @@ class IndentionAutomata:
                         if len(self.stack) == 0 and (
                             not quote or len(quote_raw) > len(quote.raw)
                         ):
+                            if quote:
+                                embedded = True
                             quote = QuoteReplyTo(node.author, quote_raw)
             else:
                 depth = min(len(self.authors), depth)
@@ -175,9 +180,11 @@ class IndentionAutomata:
                     display += node.to_markdown(True) + "\n"
                 quote_raw = node.to_markdown(False)
                 if not quote or len(quote_raw) > len(quote.raw):
+                    if quote:
+                        embedded = True
                     quote = QuoteReplyTo(node.author, quote_raw)
 
-        return IndentionResult(display, text_input, quote)
+        return IndentionResult(display, text_input, quote, embedded)
 
 
 class MetadataPassError(Exception):
@@ -348,6 +355,7 @@ class BBSParser(Parser):
                     content=post_result.display,
                     text_in=post_result.input,
                     quote_reply_to=post_result.quote,
+                    quote_embedded=post_result.quote_embedded,
                 )
             )
         return ParsedTopic(
@@ -426,7 +434,9 @@ class BBSLegacyParser(Parser):
             author, date = self.metadata_pass(post_raw)
             post_content = self.text_pass(post_raw)
             r = self.reference_pass(post_content)
-            posts.append(ParsedPost(author, date, r.display, r.input, r.quote))
+            posts.append(
+                ParsedPost(author, date, r.display, r.input, r.quote, r.quote_embedded)
+            )
 
         r = self.reference_pass(self.text_pass(topic_raw))
         return ParsedTopic(

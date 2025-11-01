@@ -75,9 +75,13 @@ class Post(Base):
 
     topic_id = Column(Integer, ForeignKey("topics.id"), nullable=False)
     author_id = Column(Integer, ForeignKey("authors.id"), nullable=False)
+    reply_to_id = Column(Integer, ForeignKey('posts.id'), nullable=True)  # 可为空
 
     topic = relationship("Topic", back_populates="posts")
     author = relationship("Author", back_populates="posts")
+
+    parent = relationship("Post", remote_side=[id], back_populates="replies")
+    replies = relationship("Post", back_populates="parent")
 
     def __repr__(self):
         return f"<Post(id={self.id}, content='{self.content[:20]}...', topic_id={self.topic_id}, author_id={self.author_id})>"
