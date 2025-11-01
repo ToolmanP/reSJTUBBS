@@ -18,7 +18,7 @@ BASE_URL = "http://bbs.sjtu.edu.cn"
 
 
 @dataclass
-class ParsedReplyTo:
+class QuoteReplyTo:
     author: str
     raw: str
 
@@ -34,7 +34,8 @@ class ParsedPost:
     author: ParsedAuthor
     created_at: datetime
     content: str
-    reply_to: ParsedReplyTo | None
+    text_in: str
+    quote_reply_to: QuoteReplyTo | None
     reply_to_id: int = -1
 
 
@@ -46,6 +47,7 @@ class ParsedTopic:
     created_at: datetime
     title: str
     content: str
+    text_in: str
     posts: list[ParsedPost]
     assets: list[str]
 
@@ -96,6 +98,13 @@ class IndentionNode(Node):
             )
 
 
+@dataclass
+class IndentionResult:
+    display: str
+    input: str
+    quote: QuoteReplyTo | None
+
+
 class IndentionAutomata:
     referer_re: re.Pattern[str]
     stack: list[IndentionNode]
@@ -106,7 +115,7 @@ class IndentionAutomata:
         self.stack = list()
         self.authors = list()
 
-    def run(self, text: str) -> tuple[str, ParsedReplyTo | None]:
+    def run(self, text: str) -> IndentionResult:
         def parse_line(line: str) -> tuple[int, str]:
             if len(line) < 2:
                 return 0, line
@@ -119,8 +128,9 @@ class IndentionAutomata:
                 pos += 2
             return depth, line[pos:]
 
-        result = ""
-        first_quote = None
+        display = ""
+        text_input = ""
+        quote = None
 
         for line in text.splitlines():
             depth, line = parse_line(line)
@@ -136,11 +146,12 @@ class IndentionAutomata:
                     if len(self.stack) != 0:
                         self.stack[-1].add_child(node)
                     else:
-                        result += node.to_markdown(True) + "\n"
-                        if len(self.stack) == 0 and not first_quote:
-                            first_quote = ParsedReplyTo(
-                                node.author, node.to_markdown(False)
-                            )
+                        display += node.to_markdown(True) + "\n"
+                        quote_raw = node.to_markdown(False)
+                        if len(self.stack) == 0 and (
+                            not quote or len(quote_raw) > len(quote.raw)
+                        ):
+                            quote = QuoteReplyTo(node.author, quote_raw)
             else:
                 depth = min(len(self.authors), depth)
                 while depth > len(self.stack):
@@ -150,7 +161,8 @@ class IndentionAutomata:
                 continue
 
             if depth == 0:
-                result += line + "\n"
+                text_input = line + "\n"
+                display += line + "\n"
             else:
                 self.stack[-1].add_child(RegularNode(text=line))
 
@@ -159,11 +171,13 @@ class IndentionAutomata:
             if len(self.stack) != 0:
                 self.stack[-1].add_child(node)
             else:
-                result += node.to_markdown(True) + "\n"
-                if not first_quote:
-                    first_quote = ParsedReplyTo(node.author, node.to_markdown(False))
+                if not quote:
+                    display += node.to_markdown(True) + "\n"
+                quote_raw = node.to_markdown(False)
+                if not quote or len(quote_raw) > len(quote.raw):
+                    quote = QuoteReplyTo(node.author, quote_raw)
 
-        return result, first_quote
+        return IndentionResult(display, text_input, quote)
 
 
 class MetadataPassError(Exception):
@@ -210,7 +224,6 @@ class Parser(ABC):
             text,
             re.MULTILINE,
         )
-        print(text)
         return text
 
     @staticmethod
@@ -300,7 +313,7 @@ class BBSParser(Parser):
     def asset_pass(self, pre: Tag) -> list[str]:
         return []
 
-    def reference_pass(self, text: str) -> tuple[str, ParsedReplyTo | None]:
+    def reference_pass(self, text: str) -> IndentionResult:
         try:
             return IndentionAutomata().run(text)
         except Exception:
@@ -319,7 +332,7 @@ class BBSParser(Parser):
         assets = self.relabel_or_strip_imgs(topic_pre)
 
         topic_text = self.text_pass(topic_pre)
-        topic_text, _ = self.reference_pass(topic_text)
+        topic_result = self.reference_pass(topic_text)
         posts: list[ParsedPost] = []
 
         for post_pre in post_pres:
@@ -327,21 +340,26 @@ class BBSParser(Parser):
             date = self.date_pass(post_pre)
             assets.extend(self.relabel_or_strip_imgs(post_pre))
             text = self.text_pass(post_pre)
-            text, reply_to = self.reference_pass(text)
+            post_result = self.reference_pass(text)
             posts.append(
                 ParsedPost(
-                    author=author, created_at=date, content=text, reply_to=reply_to
+                    author=author,
+                    created_at=date,
+                    content=post_result.display,
+                    text_in=post_result.input,
+                    quote_reply_to=post_result.quote,
                 )
             )
         return ParsedTopic(
-            int(self._mongo_post.reid.strip()),
-            topic_author,
-            self._mongo_post.section.strip(),
-            topic_date,
-            self._mongo_post.title.strip(),
-            f"reid={self._mongo_post.reid}\n\n" + topic_text,
-            posts,
-            [],
+            reid=int(self._mongo_post.reid.strip()),
+            author=topic_author,
+            board=self._mongo_post.section.strip(),
+            created_at=topic_date,
+            title=self._mongo_post.title.strip(),
+            content=f"reid={self._mongo_post.reid}\n\n" + topic_result.display,
+            text_in=topic_result.input,
+            posts=posts,
+            assets=assets,
         )
 
 
@@ -374,7 +392,7 @@ class BBSLegacyParser(Parser):
             raise
         return text
 
-    def reference_pass(self, text: str) -> tuple[str, ParsedReplyTo | None]:
+    def reference_pass(self, text: str) -> IndentionResult:
         return IndentionAutomata().run(text)
 
     def regroup(self) -> tuple[str, list[str], list[str]]:
@@ -407,19 +425,20 @@ class BBSLegacyParser(Parser):
         for post_raw in post_raws:
             author, date = self.metadata_pass(post_raw)
             post_content = self.text_pass(post_raw)
-            post_content, reply_to = self.reference_pass(post_content)
-            posts.append(ParsedPost(author, date, post_content, reply_to))
+            r = self.reference_pass(post_content)
+            posts.append(ParsedPost(author, date, r.display, r.input, r.quote))
 
-        topic_content, _ = self.reference_pass(self.text_pass(topic_raw))
+        r = self.reference_pass(self.text_pass(topic_raw))
         return ParsedTopic(
-            int(self._mongo_post.reid.strip()),
-            topic_author,
-            self._mongo_post.section.strip(),
-            topic_date,
-            self._mongo_post.title.strip(),
-            f"reid={self._mongo_post.reid}\n\n" + topic_content,
-            posts,
-            assets,
+            reid=int(self._mongo_post.reid.strip()),
+            author=topic_author,
+            board=self._mongo_post.section.strip(),
+            created_at=topic_date,
+            title=self._mongo_post.title.strip(),
+            content=f"reid={self._mongo_post.reid}\n\n" + r.display,
+            text_in=r.input,
+            posts=posts,
+            assets=assets,
         )
 
 

@@ -6,6 +6,7 @@ from tqdm import tqdm
 from pypkg.config import load_config
 from pypkg.models.mongo import MongoPost
 from pypkg.models.postgres import Author, Board, Post, Topic, make_session
+from pypkg.organize import ReplyOrganizer
 from pypkg.parser import MetadataPassError, ParsedTopic, RegroupPassError, make_parser
 
 
@@ -41,6 +42,7 @@ def parse_all_topics(
     poi: str | list[str] | None = None,
 ) -> list[ParsedTopic]:
     topics: list[ParsedTopic] = []
+    reply_organizer = ReplyOrganizer()
     with pymongo.MongoClient(mongo_addr) as client:
         db = client.get_database("sjtubbs")
         collection = db.get_collection(board)
@@ -50,11 +52,12 @@ def parse_all_topics(
                 if parser := make_parser(MongoPost(**doc)):
                     try:
                         topic = parser.parse()
+                        reply_organizer.organize(topic)
                         topics.append(topic)
                     except (MetadataPassError, RegroupPassError):
                         pass
                     except Exception:
-                        print(post.reid)
+                        print(doc["reid"])
                         raise
                 pbar.update()
     topics.sort(key=lambda t: t.reid)
