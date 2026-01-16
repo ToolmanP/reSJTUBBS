@@ -22,6 +22,11 @@ func SetNthreads(t int) {
 
 func VisitWithRetry(c *colly.Collector, url string) {
 	var err error
+	defer func() {
+		if r:= recover(); r != nil {
+			slog.Info("Failed to parse the url after retries", "url", url, "error", r)
+		}
+	}()
 	for i := range retry_times {
 		var _ = i
 		if err = c.Visit(url); err == nil {
