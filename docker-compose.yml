@@ -8,13 +8,13 @@ services:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: example
     volumes:
-      - mongo-data:/data/db
+      - ./db/mongo:/data/db
   redis:
     image: "redis:8.2.2"
     ports:
       - "6379:6379"
     volumes:
-      - redis-data:/data
+      - ./db/redis:/data
   postgres:
     image: "postgres:17.6"
     environment:
@@ -24,8 +24,4 @@ services:
     ports: 
       - "5432:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
-volumes:
-  mongo-data:
-  redis-data:
-  postgres-data:
+      - ./db/postgres:/var/lib/postgresql/data
