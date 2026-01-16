@@ -35,6 +35,9 @@ func (w *BoardWorker) Run() error {
 			if err = w.s.Add(payload); err != nil {
 				return
 			}
+			if err = w.s.SetStatus(payload, storage.EMPTY); err != nil {
+				return
+			}
 		}
 	})
 	VisitWithRetry(c, utils.BoardURL())

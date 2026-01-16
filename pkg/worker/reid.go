@@ -16,9 +16,10 @@ import (
 )
 
 type ReidWorkerGroup struct {
-	section string
-	storage *storage.ReidStorage
-	total   int
+	section  string
+	rstorage *storage.ReidStorage
+	bstorage *storage.BoardStorage
+	total    int
 }
 
 func FetchInitialTotal(section string) (int, error) {
@@ -47,13 +48,12 @@ func FetchInitialTotal(section string) (int, error) {
 
 func NewReidWorkerGroup(section string) (*ReidWorkerGroup, error) {
 
-	validator := storage.NewBoardStorage()
-	defer validator.Close()
-	if !validator.In(section) {
+	bstorage := storage.NewBoardStorage()
+	if !bstorage.In(section) {
 		return nil, errors.New("Validation Failed for board: " + section + ". Refetch the board info and validate your input.")
 	}
 
-	reis_storage := storage.NewReidStorage(section)
+	rstorage := storage.NewReidStorage(section)
 	total, err := FetchInitialTotal(section)
 
 	if err != nil {
@@ -61,9 +61,10 @@ func NewReidWorkerGroup(section string) (*ReidWorkerGroup, error) {
 	}
 
 	return &ReidWorkerGroup{
-		section: section,
-		storage: reis_storage,
-		total:   total,
+		section:  section,
+		bstorage: bstorage,
+		rstorage: rstorage,
+		total:    total,
 	}, nil
 }
 
@@ -83,6 +84,14 @@ func (w *ReidWorkerGroup) Run() error {
 		}
 	}
 
+	status, err := w.bstorage.GetStatus(w.section)
+
+	if err != nil {
+		panic(err)
+	} else if status == storage.REID_DONE {
+		return nil
+	}
+
 	ch := make(chan int, nthreads)
 	bar := utils.NewProgressBar(w.total, "Fetching Reids From "+w.section)
 	var wg sync.WaitGroup
@@ -99,8 +108,8 @@ func (w *ReidWorkerGroup) Run() error {
 							nodes = append(nodes, td)
 						}
 						payload := parse_payload(nodes)
-						w.storage.Add(payload.Reid)
-						w.storage.SetPayload(payload)
+						w.rstorage.Add(payload.Reid)
+						w.rstorage.SetPayload(payload)
 					}
 				})
 
@@ -119,9 +128,11 @@ func (w *ReidWorkerGroup) Run() error {
 	close(ch)
 	wg.Wait()
 	bar.Finish()
-	return nil
+
+	err = w.bstorage.SetStatus(w.section, storage.REID_DONE)
+	return err
 }
 
 func (w *ReidWorkerGroup) Close() {
-	w.storage.Close()
+	w.rstorage.Close()
 }

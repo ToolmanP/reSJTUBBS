@@ -7,6 +7,12 @@ import (
 	"github.com/redis/rueidis"
 )
 
+const (
+	REID_DONE = "reid_done"
+	POST_DONE = "post_done"
+	EMPTY = "empty"
+)
+
 type BoardStorage struct {
 	c rueidis.Client
 }
@@ -19,6 +25,10 @@ func NewBoardStorage() *BoardStorage {
 
 func (s *BoardStorage) Key() string {
 	return "BoardStorage"
+}
+
+func (s *BoardStorage) BStatusKey(section string) string {
+	return "board:" + section
 }
 
 func (s *BoardStorage) Add(section string) error {
@@ -55,6 +65,18 @@ func (s *BoardStorage) In(section string) bool {
 	cmd := s.c.B().Sismember().Key(s.Key()).Member(section).Build()
 	f, _ := s.c.Do(context.Background(), cmd).AsBool()
 	return f
+}
+
+func (s *BoardStorage) SetStatus(section, status string) error {
+	cmd := s.c.B().Set().Key(s.BStatusKey(section)).Value(status).Build()
+	_, err := s.c.Do(context.Background(), cmd).ToString()
+	return err
+}
+
+func (s *BoardStorage) GetStatus(section string) (string, error) {
+	cmd := s.c.B().Get().Key(s.BStatusKey(section)).Build()
+	st, err := s.c.Do(context.Background(), cmd).ToString()
+	return st, err
 }
 
 func (s *BoardStorage) Close() {
