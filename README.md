@@ -21,16 +21,11 @@ direnv allow .
 
 首先使用`make`构建所有二进制文件，并从config.template.yml设置好sjtubbs的cookie然后重命名为`config.yml`。
 
-
+`retriever`为使用golang编写的爬虫程序，分阶段从board列表，到reid列表再到post列表不断请求并缓存页面到mongodb数据库中。
+```bash
+build/retriever help
 ```
-build/reid_crawler <board> 获取该版面下的所有postid并进行缓存
-```
-
-```
-build/post_crawler <board> 获取该版面下的所有页面并进行缓存
-```
-
-```
-uv run python reconstructor.py <board> 获取页面缓存并重建论坛topic/post/author关系存入postgresql中
-
+`reimporter.py`为使用python编写的解析器，用于将sjtubbs的页面转译到markdown格式，并重建所有的回复信息。
+```bash
+uv run python reimporter.py
 ```
