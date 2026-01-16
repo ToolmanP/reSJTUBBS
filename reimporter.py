@@ -117,12 +117,16 @@ def import_parsed_topics(session: Session, parsed_topics: list["ParsedTopic"]) -
         for p_post in p_topic.posts:
             post_author = get_or_create_author(session, p_post.author.username)
             post = Post(
-                content=p_post.content,
+                content=p_post.content if p_post.quote_embedded else p_post.text_in,
                 topic=topic,
                 author=post_author,
                 created_at=p_post.created_at,
+                reply_to_id=posts[p_post.reply_to_id].id
+                if p_post.reply_to_id != -1
+                else None,
             )
             session.add(post)
+            session.flush()
 
         try:
             session.commit()
@@ -155,7 +159,10 @@ def reimporter(board: str, poi: str | list[str] | None, dryrun: bool):
     if not dryrun:
         import_parsed_topics(session, topics)
     else:
-        pass
+        for post in topics[0].posts:
+            print(post.reply_to_id, post.content)
+            if post.reply_to_id != -1:
+                print(topics[0].posts[post.reply_to_id])
 
 
 if __name__ == "__main__":
