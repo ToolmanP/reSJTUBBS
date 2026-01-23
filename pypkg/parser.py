@@ -8,6 +8,7 @@ import markdownify
 import requests
 from bs4 import BeautifulSoup, Tag
 
+from .config import load_config
 from .models.mongo import MongoPost
 
 LEGACY_SEPARATOR = "☆──────────────────────────────────────☆"
@@ -238,8 +239,7 @@ class Parser(ABC):
         text = "\n".join([str(c) for c in tag.children])
         return text
 
-    @staticmethod
-    def relabel_or_strip_imgs(tag: Tag) -> list[str]:
+    def relabel_or_strip_imgs(self, tag: Tag) -> list[str]:
         assets: list[str] = []
         for img in tag.find_all("img"):
             src = str(img["src"])
@@ -254,6 +254,7 @@ class Parser(ABC):
                 if resp.status_code != 200:
                     raise Exception("Not reached")
                 img["alt"] = url.split("/")[-1]
+                img["src"] = load_config().asset_uri_base + "/" + self._mongo_post.section + "/" + str(img["alt"])
                 assets.append(url)
             except Exception:
                 img.decompose()

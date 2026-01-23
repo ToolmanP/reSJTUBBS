@@ -1,5 +1,8 @@
+import os
+
 import click
 import pymongo
+import requests
 from sqlalchemy.orm import Session
 from tqdm import tqdm
 
@@ -9,6 +12,9 @@ from pypkg.models.postgres import Author, Board, Post, Topic, make_session
 from pypkg.organize import ReplyOrganizer
 from pypkg.parser import MetadataPassError, ParsedTopic, RegroupPassError, make_parser
 
+config = load_config()
+
+BASE_FILE_DIRECTORY: str = os.getenv("ROOT") + "/files"
 
 def docgen(collection, poi: str | list[str] | None = None):
     if not poi:
@@ -36,23 +42,32 @@ def get_count(collection, poi: str | list[str] | None = None):
         return len(poi)
 
 
+def download_all_assets(topic: ParsedTopic):
+    for url in topic.assets:
+        print("Downloading", url)
+        r = requests.get(url)
+        p = BASE_FILE_DIRECTORY + "/" + url.split("/")[-1]
+        with open(p, "wb") as f:
+            f.write(r.content)
+
+
 def parse_all_topics(
-    mongo_addr: str,
     board: str,
     poi: str | list[str] | None = None,
 ) -> list[ParsedTopic]:
     topics: list[ParsedTopic] = []
     reply_organizer = ReplyOrganizer()
-    with pymongo.MongoClient(mongo_addr) as client:
+    with pymongo.MongoClient(config.mongo) as client:
         db = client.get_database("sjtubbs")
         collection = db.get_collection(board)
         count = get_count(collection, poi)
-        with tqdm(total=count) as pbar:
+        with tqdm(total=count, desc=board) as pbar:
             for doc in docgen(collection, poi):
                 if parser := make_parser(MongoPost(**doc)):
                     try:
                         topic = parser.parse()
                         reply_organizer.organize(topic)
+                        download_all_assets(topic)
                         topics.append(topic)
                     except (MetadataPassError, RegroupPassError):
                         pass
@@ -113,7 +128,7 @@ def import_parsed_topics(session: Session, parsed_topics: list["ParsedTopic"]) -
         )
         session.add(topic)
         session.flush()
-
+        posts = []
         for p_post in p_topic.posts:
             post_author = get_or_create_author(session, p_post.author.username)
             post = Post(
@@ -125,6 +140,7 @@ def import_parsed_topics(session: Session, parsed_topics: list["ParsedTopic"]) -
                 if p_post.reply_to_id != -1
                 else None,
             )
+            posts.append(post)
             session.add(post)
             session.flush()
 
@@ -150,11 +166,14 @@ def import_parsed_topics(session: Session, parsed_topics: list["ParsedTopic"]) -
     default=False,
 )
 def reimporter(board: str, poi: str | list[str] | None, dryrun: bool):
-    config = load_config()
-    assert isinstance(poi, str)
-    if poi[0].isnumeric():
-        poi = poi.split(",")
-    topics = parse_all_topics(config.mongo, board, poi)
+    if poi:
+        assert isinstance(poi, str) or isinstance(poi, list)
+        if poi[0].isnumeric():
+            poi = poi.split(",")
+    global BASE_FILE_DIRECTORY
+    BASE_FILE_DIRECTORY += "/" + board
+    os.makedirs(BASE_FILE_DIRECTORY, exist_ok=True)
+    topics = parse_all_topics(board, poi)
     session = make_session(config.postgres)
     if not dryrun:
         import_parsed_topics(session, topics)

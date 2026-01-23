@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import yaml
+import os
 
 CONFIG_FILENAME = "config.yml"
 
@@ -11,10 +12,10 @@ class GlobalConfig:
     cookie: str
     mongo: str
     postgres: str
-
+    asset_uri_base: str
+    asset_endpoint: str
 
 _config: GlobalConfig | None = None
-
 
 def load_config() -> GlobalConfig:
     global _config
